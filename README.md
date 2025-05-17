@@ -14,4 +14,4 @@ The purpose of this analysis is to examine global tuberculosis (TB) patterns usi
 
 ## Report
 
-The report of this study can be find by clicking into this [link]
+The report of this study can be find by clicking into this [link](https://htmlpreview.github.io/?https://github.com/ccc0714/Data-analysis-on-tuberculosis-burden-by-country/blob/main/tb_analysis_report.html)
