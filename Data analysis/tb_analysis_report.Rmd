@@ -1,0 +1,182 @@
+
+---
+title: "TB Burden Country Analysis Report"
+author: Miles Chang
+date: "02-05-2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{css echo=FALSE}
+body {
+    font-family: "Segoe UI";
+    font-size: 17.5px;
+    color: #333333;
+    line-height: 1.25
+}
+
+```
+
+## Reading and Preparing Data
+
+```{r}
+library(tidyverse)
+library(scales)
+library(stats)
+library(corrplot)
+library(car)
+library(cluster)
+library(plotly)
+
+# Load TB dataset
+tb_data <- read.csv("TB_Burden_Country.csv", stringsAsFactors = FALSE)
+
+# Filter for latest available year in dataset
+latest_year <- max(tb_data$Year, na.rm = TRUE)
+tb_latest <- tb_data %>% filter(Year == latest_year)
+
+# Select and clean relevant columns
+tb_clean <- tb_latest %>%
+  select(
+    country = `Country.or.territory.name`,
+    population = `Estimated.total.population.number`,
+    prevalence_per_100k = `Estimated.prevalence.of.TB..all.forms..per.100.000.population`,
+    mortality_per_100k = `Estimated.mortality.of.TB.cases..all.forms..excluding.HIV..per.100.000.population`,
+    incidence_per_100k = `Estimated.incidence..all.forms..per.100.000.population`,
+    hiv_percent = `Estimated.HIV.in.incident.TB..percent.`,
+    case_detection_rate = `Case.detection.rate..all.forms...percent`
+  ) %>%
+  drop_na()
+
+# Rename long country name
+tb_clean$country[tb_clean$country == "Democratic People's Republic of Korea"] <- "Korea"
+```
+
+## Correlation Analysis
+
+```{r}
+numeric_vars <- tb_clean %>% 
+  select(prevalence_per_100k, mortality_per_100k, incidence_per_100k, hiv_percent, case_detection_rate)
+
+correlation_matrix <- cor(numeric_vars, use = "complete.obs")
+corrplot(correlation_matrix, method = "color", 
+         type = "upper", order = "hclust",
+         addCoef.col = "light grey", number.cex = 0.7)
+```
+
+A strong positive correlation indicates that countries with higher TB incidence per 100,000 also tend to have higher mortality rates. This suggests that TB control efforts are crucial in high-incidence settings.
+
+Prevalence and incidence are highly correlated as well since countries with more new cases usually have more existing cases
+
+HIV prevalence among TB patients and TB incidence are moderately correlated which suggests an increasing relationship between these two variables. This could be due to HIV's role in weakening immunity and increasing vulnerability to TB.
+
+The moderate negative correlation between case detection rate and mortality rate suggests that higher detection helps reduce mortality, but this may vary across countries based on healthcare quality.
+
+## Regression Analysis
+
+```{r}
+lm_model1 <- lm(mortality_per_100k ~ incidence_per_100k + hiv_percent + prevalence_per_100k, data = tb_clean)
+cooks_d <- cooks.distance(lm_model1)
+outlier <- which(cooks_d > 1)
+tb_clean_no_outlier <- tb_clean[-outlier, ]
+
+lm_model2 <- lm(mortality_per_100k ~ incidence_per_100k + hiv_percent + prevalence_per_100k, data = tb_clean_no_outlier)
+model_summary <- summary(lm_model2)
+conf_intervals <- confint(lm_model2)
+
+regression_plot <- ggplot(tb_clean_no_outlier, aes(x = incidence_per_100k, y = mortality_per_100k)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+  theme_minimal() +
+  labs(title = "TB Mortality vs. Incidence with Confidence Interval",
+       subtitle = paste("R² =", round(model_summary$r.squared, 3)),
+       x = "Incidence per 100k", y = "Mortality per 100k")
+
+regression_plot
+```
+
+```{r}
+hiv_mortality_plot <- ggplot(tb_clean, aes(x = hiv_percent, y = mortality_per_100k)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "purple") +
+  theme_minimal() +
+  labs(
+    title = "Relationship Between HIV Prevalence and TB Mortality",
+    x = "HIV % in Incident TB",
+    y = "TB Mortality per 100k"
+  )
+
+hiv_mortality_plot
+```
+
+```{r}
+model_summary
+conf_intervals
+```
+
+The multiple R-squared indicates that 85.5% of the variation in TB mortality rate is explained by incidence rate, HIV prevalence among TB cases, and TB prevalence rate. Since all explanatory variables have statistically significant p-values, this suggests that each variable contributes meaningfully to explaining TB mortality.
+
+Both regression plot suggests an increasing relationship of TB mortality rate as each explanatory variable increase. While incidence rate have a stronger relationship with TB mortality rate compare to HIV prevalence in TB cases. 
+
+## Top 10 TB Incidence Rates
+
+```{r}
+tb_top_10 <- tb_clean %>% arrange(desc(incidence_per_100k)) %>% slice(1:10)  
+ggplot(tb_top_10, aes(x = reorder(country, -incidence_per_100k), y = incidence_per_100k)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  labs(title = "Top 10 TB Incidence Rate by Country", x = "Country", y = "Incidence Rate per 100,000")
+```
+
+From this graph, we can see the top 10 countries with the highest TB incidence rate which should be prioritized for TB control strategies. 
+
+## K-Means Clustering
+
+```{r}
+scaled_data <- scale(numeric_vars)
+kmeans_result <- kmeans(scaled_data, centers = 3, nstart = 25)
+
+tb_clustered <- tb_clean %>%
+  mutate(cluster = as.factor(kmeans_result$cluster))
+
+cluster_stats <- tb_clustered %>%
+  group_by(cluster) %>%
+  summarize(
+    count = n(),
+    mean_incidence = mean(incidence_per_100k),
+    mean_mortality = mean(mortality_per_100k),
+    mean_hiv_percent = mean(hiv_percent),
+    mean_detection = mean(case_detection_rate)
+  )
+
+cluster_stats
+```
+
+The K-means clustering analysis grouped countries into three distinct clusters based on TB incidence, mortality, HIV prevalence among TB cases, and case detection rate. Cluster 3 have the highest average TB incidence of 645.6 per 100k, TB mortality of 56.2 per 100k and HIV co-infection rate of 56.2%. These clusters can be used to prioritize and target resource allocation, especially to countries in Cluster 3, in order to more effectively control TB incidence and mortality in the most affected countries. 
+
+## Interactive Cluster Plot
+
+```{r, eval = FALSE}
+tb_clustered <- tb_clustered %>%
+  mutate(cluster_label = case_when(
+    cluster == 3 ~ "High Burden",
+    cluster == 1 ~ "Moderate Burden",
+    cluster == 2 ~ "Low Burden"
+  ))
+
+plotly_cluster <- ggplot(tb_clustered, aes(x = incidence_per_100k, y = mortality_per_100k, color = cluster, text = country)) +
+  geom_point(size = 3) +
+  labs(title = 'Interactive Country Cluster', x = "Incidence Rate", y = 'Mortality Rate')
+  theme_minimal()
+
+ggplotly(plotly_cluster, tooltip = "text")
+```
+
+Due to the limitation of html preview on github, the interactive plot couldn't be display. Here is the cluster plot without applying ggplotly
+
+![](cluster_plot.png)
+
